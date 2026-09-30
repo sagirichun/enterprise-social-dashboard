@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+*.local
+.env
+.env*.local
+prisma/migrations/dev/
+.DS_Store
+*.log
+coverage/
+.turbo/
+
+# User-uploaded media (file manager) - never commit
+apps/web/public/uploads/

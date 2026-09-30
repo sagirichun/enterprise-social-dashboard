@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    /* Package is consumed as source via src/index.ts by bundlers (Next.js) and tsx;
+       use bundler resolution so extensionless relative imports typecheck. */
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

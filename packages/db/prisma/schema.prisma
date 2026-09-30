@@ -1,0 +1,284 @@
+// Prisma schema for the Enterprise Social Media Management Dashboard.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum Platform {
+  FACEBOOK
+  INSTAGRAM
+  TIKTOK
+  YOUTUBE
+  X
+  THREADS
+  LINKEDIN
+}
+
+enum PostStatus {
+  DRAFT
+  QUEUED
+  PUBLISHING
+  PUBLISHED
+  FAILED
+}
+
+enum StreamStatus {
+  IDLE
+  LIVE
+  STOPPED
+  ERROR
+}
+
+enum AiProvider {
+  OPENAI
+  ANTHROPIC
+  OLLAMA
+  LMSTUDIO
+  CUSTOM
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  image        String?
+  // Set for email/password sign-in via the Credentials provider. Null for OAuth-only users.
+  passwordHash String?
+  plan         Plan     @default(FREE)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts     Account[]
+  posts        Post[]
+  autoReplyRules AutoReplyRule[]
+  liveStreams  LiveStream[]
+  aiConfig     AiConfig?
+  aiEndpoints  AiEndpoint[]
+  mediaAssets  MediaAsset[]
+
+  @@index([email])
+}
+
+model Account {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform          Platform
+  // Platform-side identifier: Facebook Page ID, TikTok open_id, YouTube channel ID, X user ID, etc.
+  providerAccountId String
+  // Encrypted with AES-256-GCM (see apps/web/lib/encryption.ts). Never returned by the API.
+  accessToken       String    @db.Text
+  refreshToken      String?   @db.Text
+  expiresAt         DateTime?
+  profileName       String?
+  profileUsername   String?
+  profileImage      String?
+  scopes            String[]  @default([])
+  isActive          Boolean   @default(true)
+  lastSyncAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  comments       CommentInbox[]
+  autoReplyRules AutoReplyRule[]
+  analytics      AnalyticsSnapshot[]
+
+  @@unique([userId, platform, providerAccountId])
+  @@index([userId])
+  @@index([platform])
+}
+
+model Post {
+  id              String     @id @default(cuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content         String     @db.Text
+  // Ordered list of public media URLs (images / videos).
+  mediaUrls       Json       @default("[]")
+  // Platform enum names this post targets, e.g. ["FACEBOOK", "X"].
+  platforms       String[]   @default([])
+  // Per-platform post category, e.g. { "YOUTUBE": "shorts", "TIKTOK": "video" }.
+  // Categories depend on the platform (video, shorts, reel, story, post, carousel, live).
+  platformCategories Json    @default("{}")
+  // Optional thumbnail image URL (uploaded or AI-generated).
+  thumbnailUrl    String?
+  scheduledAt     DateTime?
+  publishedAt     DateTime?
+  status          PostStatus @default(DRAFT)
+  // { FACEBOOK: "<post-id>", X: "<tweet-id>", ... }
+  platformPostIds Json       @default("{}")
+  errorMessage    String?    @db.Text
+  retryCount      Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([userId, status])
+  @@index([status, scheduledAt])
+}
+
+model CommentInbox {
+  id           String   @id @default(cuid())
+  accountId    String
+  account      Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform     Platform
+  // Platform-side comment identifier.
+  externalId   String
+  // Platform-side parent identifier (post/video/tweet id) when available.
+  parentId     String?
+  authorName   String?
+  authorAvatar String?
+  text         String   @db.Text
+  // POSITIVE | NEUTRAL | NEGATIVE (set by the sentiment pipeline, best-effort).
+  sentiment      String?
+  sentimentScore Float?
+  replied        Boolean  @default(false)
+  replyText      String?  @db.Text
+  repliedAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  @@unique([accountId, externalId])
+  @@index([accountId, replied])
+  @@index([platform, createdAt])
+}
+
+model AutoReplyRule {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Null accountId + null platform = global rule for the user.
+  accountId        String?
+  account          Account?  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform         Platform?
+  name             String    @default("Default rule")
+  isEnabled        Boolean   @default(true)
+  // Supports {{comment}}, {{author}} and {{platform}} placeholders.
+  promptTemplate   String    @db.Text
+  replyDelaySec    Int       @default(60)
+  // Empty = reply regardless of sentiment. Values: POSITIVE, NEUTRAL, NEGATIVE.
+  sentimentFilter  String[]  @default([])
+  // Empty = no keyword gating. A comment must contain at least one keyword (case-insensitive).
+  keywordFilter    String[]  @default([])
+  maxRepliesPerDay Int       @default(50)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([accountId])
+}
+
+model LiveStream {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?      @db.Text
+  // Source video to loop (public URL or local path visible to the streaming engine).
+  videoUrl     String
+  rtmpUrl      String
+  // Encrypted with AES-256-GCM. Decrypted only when dispatching to the streaming engine.
+  rtmpKey      String       @db.Text
+  platform     Platform
+  status       StreamStatus @default(IDLE)
+  loop         Boolean      @default(true)
+  // Optional thumbnail image URL shown for the stream.
+  thumbnailUrl String?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  errorMessage String?      @db.Text
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([userId, status])
+}
+
+model AiConfig {
+  id              String     @id @default(cuid())
+  userId          String     @unique
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider        AiProvider @default(OPENAI)
+  model           String     @default("gpt-4o-mini")
+  // Required for OLLAMA / LMSTUDIO / CUSTOM. Optional override for OpenAI/Anthropic gateways.
+  baseUrl         String?
+  // Encrypted with AES-256-GCM. Null for keyless local servers.
+  apiKeyEncrypted String?    @db.Text
+  temperature     Float      @default(0.7)
+  maxTokens       Int        @default(500)
+  systemPrompt    String?    @db.Text
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+model AnalyticsSnapshot {
+  id         String   @id @default(cuid())
+  accountId  String
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date       DateTime @db.Date
+  followers  Int      @default(0)
+  engagement Int      @default(0)
+  impressions Int     @default(0)
+  // Platform-specific breakdown, e.g. { "likes": 12, "shares": 3 }.
+  clicks     Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@unique([accountId, date])
+  @@index([accountId, date])
+}
+
+// File manager: uploaded media stored on the server's disk (public/uploads)
+// so posts, thumbnails and the live engine can reuse them without re-uploading.
+model MediaAsset {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Random safe file name on disk, e.g. "k3j9f2_video.mp4".
+  fileName     String
+  originalName String
+  mimeType     String
+  size         Int
+  width        Int?
+  height       Int?
+  // Public URL served by the web app, e.g. "/uploads/k3j9f2_video.mp4".
+  url          String
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// A named AI endpoint. Users can register several (e.g. 9Router, Ollama,
+// OpenAI) each with its own base URL + API key, and switch the active one.
+// The legacy single AiConfig row is auto-migrated into an endpoint on first use.
+model AiEndpoint {
+  id              String     @id @default(cuid())
+  userId          String
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String     @default("Default")
+  provider        AiProvider @default(OPENAI)
+  model           String     @default("gpt-4o-mini")
+  // Required for OLLAMA / LMSTUDIO / CUSTOM. Optional override otherwise.
+  baseUrl         String?
+  // Encrypted with AES-256-GCM. Null for keyless local servers.
+  apiKeyEncrypted String?    @db.Text
+  temperature     Float      @default(0.7)
+  maxTokens       Int        @default(500)
+  systemPrompt    String?    @db.Text
+  isActive        Boolean    @default(false)
+  // Last connection-check result (set by /api/ai/test).
+  lastCheckAt     DateTime?
+  lastCheckOk     Boolean?
+  lastCheckError  String?    @db.Text
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([userId])
+}
